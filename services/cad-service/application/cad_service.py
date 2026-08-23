@@ -203,27 +203,34 @@ def _sse(payload: dict) -> str:
 def _run_generation(spec: dict, idea_text: str):
     """
     Synchronous worker executed in a thread.
-    Tries CAD-Coder (if model is loaded), falls back to parametric generator.
+    Tries CAD-Coder first (loads model if needed on first request).
+    Falls back to parametric generator if CAD-Coder fails.
     Returns (cq.Workplane, code_str).
     """
     from services.cad_service.generators.parametric_cad import generate_from_spec
 
-    # Try CAD-Coder first (only if model already loaded — don't block)
+    # Try CAD-Coder first
     try:
         from services.cad_service.generators.cad_coder_generator import (
             _ModelSingleton, _generate_cadquery_code, _validate_ast, _execute_code
         )
         singleton = _ModelSingleton.get()
-        if singleton._loaded:
-            code = _generate_cadquery_code(spec.get("description", idea_text), spec)
-            _validate_ast(code)
-            wp = _execute_code(code)
-            logger.info("CAD-Coder generation succeeded.")
-            return wp, code
+        # If model not loaded yet, load it now (blocking, but ensures CAD-Coder is used for first request)
+        if not singleton._loaded:
+            logger.info("🔄 CAD-Coder model not yet loaded — loading now (may take 30-60 seconds on first request)...")
+            singleton.ensure_loaded()
+        
+        logger.info("🚀 Generating CAD code with CAD-Coder for prompt: %s", idea_text[:60])
+        code = _generate_cadquery_code(spec.get("description", idea_text), spec)
+        _validate_ast(code)
+        wp = _execute_code(code)
+        logger.info("✅ CAD-Coder generation succeeded — detailed drone-specific geometry generated.")
+        return wp, code
     except Exception as exc:
-        logger.warning("CAD-Coder not available, using parametric generator: %s", exc)
+        logger.warning("⚠️  CAD-Coder not available, using parametric generator: %s", exc, exc_info=True)
 
-    # Parametric generator — always works, idea-specific shapes
+    # Parametric generator — maps spec to idea-specific shapes
+    logger.info("🔧 Using parametric generator for component_type: %s", spec.get("component_type", "unknown"))
     wp = generate_from_spec(spec)
     code = f"# Parametric generator: {spec.get('component_type', 'drone_frame')}\n# spec: {json.dumps(spec, indent=2)}"
     return wp, code
