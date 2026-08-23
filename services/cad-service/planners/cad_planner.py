@@ -98,8 +98,14 @@ class CADPlanner:
             logger.info("✅ OpenRouter spec generated: type=%s span=%s motors=%s", 
                        spec.get("component_type"), spec.get("span_mm"), spec.get("motor_count"))
             return spec
+        except ValueError as exc:
+            logger.error("❌ CADPlanner OpenRouter extraction failed (API key issue): %s", exc)
+            spec = self._fallback_spec(idea_text)
+            logger.warning("⚠️  Using fallback spec instead: type=%s span=%s",
+                          spec.get("component_type"), spec.get("span_mm"))
+            return spec
         except Exception as exc:
-            logger.error("❌ CADPlanner OpenRouter extraction failed: %s", exc)
+            logger.error("❌ CADPlanner OpenRouter extraction failed (network/parsing): %s", exc, exc_info=True)
             spec = self._fallback_spec(idea_text)
             logger.warning("⚠️  Using fallback spec instead: type=%s span=%s",
                           spec.get("component_type"), spec.get("span_mm"))

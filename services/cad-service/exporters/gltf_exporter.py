@@ -1,6 +1,7 @@
 import os
 import tempfile
 import logging
+import json
 import cadquery as cq
 
 logger = logging.getLogger(__name__)
@@ -14,12 +15,14 @@ class GLTFExporter:
 
         Strategy:
           1. Export the CadQuery geometry to a temporary STL file.
-          2. Load the STL into trimesh.
-          3. Export as GLTF with proper buffer handling.
+          2. Load the STL into trimesh and validate geometry.
+          3. Export as GLTF with deterministic buffer naming to avoid collisions.
 
         Returns the path to the actual file created.
         """
         os.makedirs(os.path.dirname(filename), exist_ok=True)
+        out_dir = os.path.dirname(filename)
+        base_name = os.path.splitext(os.path.basename(filename))[0]
 
         # ── Step 1: CadQuery → STL (always works) ──────────────────────────
         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
@@ -29,11 +32,20 @@ class GLTFExporter:
             cq.exporters.export(model, stl_path)
             logger.debug("STL intermediate written to %s", stl_path)
 
-            # ── Step 2: STL → GLTF via trimesh ────────────────────────────
+            # ── Step 2: STL → Mesh with validation ─────────────────────────
             import trimesh
             from trimesh.exchange.gltf import export_gltf
 
             mesh = trimesh.load(stl_path, force="mesh")
+            
+            # Validate mesh is not empty or degenerate
+            if mesh.is_empty:
+                raise RuntimeError("Mesh is empty after loading STL")
+            if mesh.vertices.shape[0] < 3:
+                raise RuntimeError("Mesh has fewer than 3 vertices (degenerate)")
+            
+            logger.debug("Mesh loaded: %d vertices, %d faces, volume=%.2f", 
+                        mesh.vertices.shape[0], mesh.faces.shape[0], mesh.volume)
 
             # Apply a neutral grey material
             mesh.visual = trimesh.visual.ColorVisuals(
@@ -43,34 +55,62 @@ class GLTFExporter:
 
             scene = trimesh.Scene(geometry={"model": mesh})
 
-            # Export as GLTF with separate .bin buffers
-            # This returns a dict: {filename: bytes_data}
+            # ── Step 3: GLTF Export with deterministic buffer naming ────────
             gltf_dict = export_gltf(scene)
             
+            if not gltf_dict:
+                raise RuntimeError("GLTF export returned empty dict")
+
             # Find the main .gltf file (the JSON)
             gltf_key = next(
                 (k for k in gltf_dict if k.endswith(".gltf")),
-                list(gltf_dict.keys())[0] if gltf_dict else None,
+                None,
             )
             
             if not gltf_key:
+                logger.error("Available GLTF keys: %s", list(gltf_dict.keys()))
                 raise RuntimeError("No GLTF file generated from trimesh export")
 
-            # Write the main GLTF JSON file
-            with open(filename, "wb") as f:
-                f.write(gltf_dict[gltf_key])
+            # ── Step 4: Write GLTF JSON and fix buffer URI references ──────
+            gltf_json = gltf_dict[gltf_key]
+            if isinstance(gltf_json, bytes):
+                gltf_content = json.loads(gltf_json.decode('utf-8'))
+            else:
+                gltf_content = json.loads(gltf_json) if isinstance(gltf_json, str) else gltf_json
+
+            # Rewrite buffer URIs to use deterministic names based on model ID
+            buffer_mapping = {}  # {original_name: new_name}
+            buffer_index = 0
+            
+            if "buffers" in gltf_content:
+                for buf in gltf_content["buffers"]:
+                    if "uri" in buf:
+                        original_uri = buf["uri"]
+                        # Use model-based deterministic naming
+                        new_uri = f"{base_name}.buffer.{buffer_index}.bin"
+                        buffer_mapping[original_uri] = new_uri
+                        buf["uri"] = new_uri
+                        logger.debug("Rewriting buffer URI: %s → %s", original_uri, new_uri)
+                        buffer_index += 1
+
+            # ── Step 5: Write GLTF JSON file ──────────────────────────────
+            with open(filename, "w") as f:
+                json.dump(gltf_content, f)
             logger.debug("GLTF JSON written: %s", filename)
 
-            # Write companion .bin buffer files
-            out_dir = os.path.dirname(filename)
+            # ── Step 6: Write buffer files with deterministic names ────────
             bin_count = 0
             for key, data in gltf_dict.items():
                 if key == gltf_key or not isinstance(data, bytes):
                     continue
-                companion_path = os.path.join(out_dir, key)
+                
+                # Use the mapping we created for deterministic naming
+                new_name = buffer_mapping.get(key, f"{base_name}.buffer.{bin_count}.bin")
+                companion_path = os.path.join(out_dir, new_name)
+                
                 with open(companion_path, "wb") as f:
                     f.write(data)
-                logger.debug("Buffer file written: %s (size: %d bytes)", key, len(data))
+                logger.debug("Buffer file written: %s (size: %d bytes)", new_name, len(data))
                 bin_count += 1
             
             logger.info("GLTF 2.0 exported successfully: %s (+ %d buffers)", filename, bin_count)
@@ -93,7 +133,7 @@ class GLTFExporter:
             if os.path.exists(stl_path):
                 try:
                     os.unlink(stl_path)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to clean up temp STL: %s", e)
 
 

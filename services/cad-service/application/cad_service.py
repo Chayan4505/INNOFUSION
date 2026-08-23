@@ -131,83 +131,66 @@ class CADApplicationService:
         stl_path  = f"{EXPORT_DIR}/model_{unique_id}.stl"
 
         export_errors: list[str] = []
+        successful_exports = []
 
-        # Clean up old gltf_buffer_*.bin files before exporting
-        # This prevents mismatched buffer file issues when multiple exports happen
-        old_buffers = glob.glob(f"{EXPORT_DIR}/gltf_buffer_*.bin")
-        for old_buf in old_buffers:
-            try:
-                os.remove(old_buf)
-                logger.debug("Cleaned up old buffer file: %s", old_buf)
-            except Exception:
-                pass
-
+        # Export STEP
         try:
             StepExporter.export(workplane, step_path)
+            successful_exports.append("STEP")
+            logger.info("STEP export successful: %s", step_path)
         except Exception as exc:
-            logger.error("STEP export failed: %s", exc)
-            export_errors.append(f"STEP: {exc}")
+            logger.error("STEP export failed: %s", exc, exc_info=True)
+            export_errors.append(f"STEP: {str(exc)[:100]}")
 
+        # Export GLTF (with deterministic buffer naming to prevent collisions)
         try:
             actual_gltf = GLTFExporter.export(workplane, gltf_path)
-            if actual_gltf != gltf_path:
-                try:
-                    import trimesh, tempfile, os as _os
-                    import cadquery as _cq
-                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
-                        stl_tmp = tmp.name
-                    _cq.exporters.export(workplane, stl_tmp)
-                    mesh = trimesh.load(stl_tmp, force="mesh")
-                    mesh.visual = trimesh.visual.ColorVisuals(
-                        mesh=mesh, vertex_colors=[180, 180, 190, 255])
-                    scene = trimesh.Scene(geometry={"model": mesh})
-                    gltf_bytes = trimesh.exchange.gltf.export_gltf(scene)
-                    gltf_key = next(
-                        (k for k in gltf_bytes if k.endswith(".gltf")),
-                        list(gltf_bytes.keys())[0])
-                    with open(gltf_path, "wb") as f:
-                        f.write(gltf_bytes[gltf_key])
-                    out_dir = _os.path.dirname(gltf_path)
-                    for key, data in gltf_bytes.items():
-                        if key == gltf_key:
-                            continue
-                        with open(_os.path.join(out_dir, key), "wb") as f:
-                            f.write(data)
-                    if _os.path.exists(stl_tmp):
-                        _os.unlink(stl_tmp)
-                    logger.info("GLTF re-exported successfully after fallback.")
-                except Exception as retry_exc:
-                    logger.error("GLTF retry also failed: %s", retry_exc)
-                    export_errors.append(f"GLTF retry: {retry_exc}")
+            successful_exports.append("GLTF")
+            logger.info("GLTF export successful: %s (with deterministic buffers)", actual_gltf)
         except Exception as exc:
-            logger.error("GLTF export failed: %s", exc)
-            export_errors.append(f"GLTF: {exc}")
+            logger.error("GLTF export failed: %s", exc, exc_info=True)
+            export_errors.append(f"GLTF: {str(exc)[:100]}")
             actual_gltf = gltf_path
 
+        # Export STL
         try:
             STLExporter.export(workplane, stl_path)
+            successful_exports.append("STL")
+            logger.info("STL export successful: %s", stl_path)
         except Exception as exc:
-            logger.error("STL export failed: %s", exc)
-            export_errors.append(f"STL: {exc}")
+            logger.error("STL export failed: %s", exc, exc_info=True)
+            export_errors.append(f"STL: {str(exc)[:100]}")
 
         # ── Stage 5: Final SSE payload ────────────────────────────────────
-        yield _sse({"status": "Uploading artifacts…"})
+        yield _sse({"status": "Finalizing response…"})
         await asyncio.sleep(0.2)
+
+        # Determine final status based on what exports succeeded
+        if len(successful_exports) == 3:
+            status = "Completed successfully"
+        elif len(successful_exports) > 0:
+            status = f"Completed with issues ({len(successful_exports)}/3 formats exported)"
+        else:
+            status = "Failed — all export formats failed"
+            logger.error("All exports failed for model %s", unique_id)
 
         final: dict = {
             "id":             unique_id,
-            "status":         "Completed" if not export_errors else "Completed with warnings",
+            "status":         status,
             "parameters":     spec,
-            "generated_code": generated_code,          # shown in frontend debug panel
+            "generated_code": generated_code,
             "gltf_url":       f"/api/v1/cad/download/model_{unique_id}.gltf",
             "step_url":       f"/api/v1/cad/download/model_{unique_id}.step",
             "stl_url":        f"/api/v1/cad/download/model_{unique_id}.stl",
+            "formats":        successful_exports,
         }
+        
         if export_errors:
-            final["warnings"] = export_errors
+            final["errors"] = export_errors
+            logger.warning("Export completed with %d errors: %s", len(export_errors), export_errors)
 
         yield _sse(final)
-        logger.info("CAD generation complete: id=%s", unique_id)
+        logger.info("✅ CAD generation complete: id=%s status=%s exports=%s", unique_id, status, successful_exports)
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

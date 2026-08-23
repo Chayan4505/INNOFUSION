@@ -293,7 +293,7 @@ def _research():
         
         @fallback.post("/search")
         def search_fallback(query: dict):
-            return {"error": f"Research service unavailable: {str(e)}", "message": "Ensure OPENAI_API_KEY is set in .env"}
+            return {"error": "Research service unavailable", "message": "Ensure OPENAI_API_KEY is set in .env"}
         
         @fallback.get("/health")
         def health():
