@@ -119,13 +119,24 @@ class _ModelSingleton:
             cache_dir=cache_dir,
             trust_remote_code=True,
         )
-        self._model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            cache_dir=cache_dir,
-            quantization_config=bnb_config,
-            device_map=device_map,
-            trust_remote_code=True,
-        )
+        # For CPU, don't use device_map="auto" — it requires accelerate
+        if use_gpu:
+            self._model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID,
+                cache_dir=cache_dir,
+                quantization_config=bnb_config,
+                device_map=device_map,
+                trust_remote_code=True,
+            )
+        else:
+            # CPU: Load without device_map to avoid accelerate requirement
+            self._model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID,
+                cache_dir=cache_dir,
+                quantization_config=bnb_config,
+                trust_remote_code=True,
+            ).to("cpu")
+        
         self._model.eval()
         self._loaded = True
         logger.info("CAD-Coder model loaded successfully.")
