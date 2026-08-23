@@ -26,6 +26,7 @@ New pipeline (replaces the old hardcoded generate_drone approach):
 from __future__ import annotations
 
 import asyncio
+import glob
 import json
 import logging
 import os
@@ -130,6 +131,16 @@ class CADApplicationService:
         stl_path  = f"{EXPORT_DIR}/model_{unique_id}.stl"
 
         export_errors: list[str] = []
+
+        # Clean up old gltf_buffer_*.bin files before exporting
+        # This prevents mismatched buffer file issues when multiple exports happen
+        old_buffers = glob.glob(f"{EXPORT_DIR}/gltf_buffer_*.bin")
+        for old_buf in old_buffers:
+            try:
+                os.remove(old_buf)
+                logger.debug("Cleaned up old buffer file: %s", old_buf)
+            except Exception:
+                pass
 
         try:
             StepExporter.export(workplane, step_path)

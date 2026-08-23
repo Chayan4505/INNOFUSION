@@ -18,15 +18,16 @@ class AIModelFactory(ChatModel):
     The central unified interface for all Domain Services.
     Implements Automatic Failover, Retries, Timeouts, and Caching.
     """
-    def __init__(self, preferred_provider: str = None, model_name: str = "gpt-4-turbo"):
+    def __init__(self, preferred_provider: str = None, model_name: str = None):
         self.preferred_provider = preferred_provider or config.failover_providers[0]
-        self.model_name = model_name
+        self.model_name = model_name or getattr(config, 'openrouter_model', 'nvidia/nemotron-3.5-lightning:free')
 
     def _get_api_key(self, provider: str) -> str:
         keys = {
             "openai": config.openai_api_key,
             "anthropic": config.anthropic_api_key,
             "gemini": config.gemini_api_key,
+            "openrouter": config.openrouter_api_key,
         }
         return keys.get(provider, "dummy_key")
 

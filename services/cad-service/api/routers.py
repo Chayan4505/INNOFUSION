@@ -48,7 +48,27 @@ async def download_file(filename: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
-    return FileResponse(file_path)
+    # Set appropriate content type
+    content_type = "application/octet-stream"
+    if filename.endswith(".gltf"):
+        content_type = "application/gltf+json"
+    elif filename.endswith(".glb"):
+        content_type = "model/gltf-binary"
+    elif filename.endswith(".bin"):
+        content_type = "application/octet-stream"
+    elif filename.endswith(".step") or filename.endswith(".stp"):
+        content_type = "model/step"
+    elif filename.endswith(".stl"):
+        content_type = "model/stl"
+    
+    return FileResponse(
+        file_path,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
 
 
 @router.get("/{id}/preview")

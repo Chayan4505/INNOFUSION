@@ -39,25 +39,90 @@ class CanvasErrorBoundary extends Component<{ children: React.ReactNode }, EBSta
   }
 }
 
+// ────────── ErrorBoundary for useGLTF errors ──────────
+const GLTFErrorBoundary = ({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) => {
+  const [hasError, setHasError] = React.useState(false);
+  
+  if (hasError) {
+    return fallback || <WireframeGhost />;
+  }
+  
+  return (
+    <Suspense
+      fallback={fallback || <WireframeGhost />}
+      onError={(error: any) => {
+        console.error('GLTF loading failed:', error);
+        setHasError(true);
+      }}
+    >
+      {children}
+    </Suspense>
+  );
+};
+function ModelContent({ url, clippingPlane, wireframe }: { url: string; clippingPlane: THREE.Plane | null; wireframe: boolean }) {
+  // Don't use Suspense - just render the model directly
+  // If it's still loading, the fallback box will show
+  return (
+    <>
+      <Model key={url} url={url} clippingPlane={clippingPlane} wireframe={wireframe} />
+      {clippingPlane && <ClipPlaneHelper plane={clippingPlane} visible={false} />}
+      <Grid infiniteGrid fadeDistance={200} fadeStrength={2} cellColor="#1E293B" sectionColor="#334155" />
+    </>
+  );
+}
+
 // ────────── 3D Model with clipping support ──────────
 function Model({ url, clippingPlane, wireframe }: { url: string; clippingPlane: THREE.Plane | null; wireframe: boolean }) {
-  const { scene } = useGLTF(url);
+  // useGLTF needs a full URL, so construct it if it's a relative path
+  let fullUrl = url?.startsWith('http') ? url : `${window.location.origin}${url}`;
+  
+  // For useGLTF, we need a "clean" URL without query parameters for relative asset resolution
+  const cleanUrl = fullUrl.split('?')[0]; // Remove query params
+  
+  console.log('📦 Loading model from:', cleanUrl);
+  
+  const gltf = useGLTF(cleanUrl);
+  const { scene } = gltf;
   
   React.useEffect(() => {
+    if (!scene) {
+      console.warn('⚠️ Scene is null/undefined');
+      return;
+    }
+    console.log('✅ Model loaded successfully');
+    console.log('  Children count:', scene.children.length);
+    
+    let meshCount = 0;
     scene.traverse((child: any) => {
       if (child.isMesh) {
-        child.material = child.material.clone();
-        child.material.wireframe = wireframe;
-        if (clippingPlane) {
-          child.material.clippingPlanes = [clippingPlane];
-          child.material.clipShadows = true;
-        } else {
-          child.material.clippingPlanes = [];
+        meshCount++;
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          child.material = child.material.clone();
+          child.material.wireframe = wireframe;
+          if (clippingPlane) {
+            child.material.clippingPlanes = [clippingPlane];
+            child.material.clipShadows = true;
+          } else {
+            child.material.clippingPlanes = [];
+          }
+          child.material.needsUpdate = true;
         }
-        child.material.needsUpdate = true;
       }
     });
+    console.log('  Total meshes:', meshCount);
   }, [scene, clippingPlane, wireframe]);
+
+  if (!scene || scene.children.length === 0) {
+    console.error('❌ Scene empty, showing fallback box');
+    return (
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[50, 50, 50]} />
+        <meshPhongMaterial color="#6366F1" wireframe={wireframe} />
+      </mesh>
+    );
+  }
 
   return <primitive object={scene} />;
 }
@@ -65,17 +130,23 @@ function Model({ url, clippingPlane, wireframe }: { url: string; clippingPlane: 
 // ────────── Wireframe Ghost (Loading placeholder) ──────────
 function WireframeGhost() {
   const meshRef = useRef<THREE.Mesh>(null);
-  useFrame((_, delta) => {
-    if (meshRef.current) {
-      meshRef.current.rotation.y += delta * 0.5;
-    }
-  });
-  return (
-    <mesh ref={meshRef}>
-      <boxGeometry args={[40, 20, 40]} />
-      <meshBasicMaterial wireframe color="#3B82F6" transparent opacity={0.3} />
-    </mesh>
-  );
+  
+  // Move useFrame hook inside a component that's guaranteed to be inside Canvas
+  const AnimatedMesh = () => {
+    useFrame((_, delta) => {
+      if (meshRef.current) {
+        meshRef.current.rotation.y += delta * 0.5;
+      }
+    });
+    return (
+      <mesh ref={meshRef}>
+        <boxGeometry args={[40, 20, 40]} />
+        <meshBasicMaterial wireframe color="#3B82F6" transparent opacity={0.3} />
+      </mesh>
+    );
+  };
+
+  return <AnimatedMesh />;
 }
 
 // ────────── Clipping Plane Visualizer ──────────
@@ -163,6 +234,9 @@ export default function ThreeViewer({ modelUrl, isGenerating = false, generation
   const [clipOffset, setClipOffset] = useState(0);
   const [showWireframe, setShowWireframe] = useState(false);
 
+  // Debug logging
+  console.log('🎯 ThreeViewer props:', { modelUrl, isGenerating, generationStatus, hasData: !!cadData });
+
   // Parametric inputs (cosmetic — would trigger backend re-gen in production)
   const [params, setParams] = useState({
     span: cadData?.parameters?.span_mm || 450,
@@ -183,7 +257,7 @@ export default function ThreeViewer({ modelUrl, isGenerating = false, generation
     <div style={{ display: 'flex', gap: '0', borderRadius: '12px', overflow: 'hidden', border: '1px solid #E2E8F0', background: '#fff' }}>
 
       {/* ── 3D Viewport (70%) ── */}
-      <div style={{ flex: '7', position: 'relative', background: '#0F172A', minHeight: '500px' }}>
+      <div style={{ flex: '7', position: 'relative', background: '#0F172A', minHeight: '700px' }}>
 
         {/* View Presets Toolbar */}
         <div style={{
@@ -279,31 +353,24 @@ export default function ThreeViewer({ modelUrl, isGenerating = false, generation
             shadows
             camera={{ position: [100, 80, 100], fov: 50 }}
             gl={{ localClippingEnabled: true }}
-            style={{ background: '#0F172A' }}
+            style={{ background: '#0F172A', width: '100%', height: '100%' }}
           >
             <CameraController preset={activePreset} />
             <ambientLight intensity={0.4} />
             <directionalLight position={[10, 10, 5]} intensity={0.8} castShadow />
 
-            <Suspense fallback={
+            {modelUrl ? (
+              <ModelContent url={modelUrl} clippingPlane={clippingPlane} wireframe={showWireframe} />
+            ) : isGenerating ? (
+              <WireframeGhost />
+            ) : (
               <Html center>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                  <WireframeGhost />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', color: '#94A3B8', fontSize: '14px' }}>
+                  <span>⏳ Waiting for CAD generation...</span>
                 </div>
               </Html>
-            }>
-              {modelUrl ? (
-                <Stage environment="city" intensity={0.3} adjustCamera={false}>
-                  <Model url={modelUrl} clippingPlane={clippingPlane} wireframe={showWireframe} />
-                </Stage>
-              ) : isGenerating ? (
-                <WireframeGhost />
-              ) : null}
-            </Suspense>
+            )}
 
-            {clippingPlane && <ClipPlaneHelper plane={clippingPlane} visible={showSection} />}
-
-            <Grid infiniteGrid fadeDistance={200} fadeStrength={2} cellColor="#1E293B" sectionColor="#334155" />
             <OrbitControls makeDefault enableZoom enablePan />
             <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
               <GizmoViewport labelColor="white" axisHeadScale={0.8} />
@@ -315,7 +382,7 @@ export default function ThreeViewer({ modelUrl, isGenerating = false, generation
       {/* ── Right Spec Panel (30%) ── */}
       <div style={{
         flex: '3', background: '#FAFBFC', borderLeft: '1px solid #E2E8F0',
-        padding: '20px', overflowY: 'auto', maxHeight: '500px',
+        padding: '20px', overflowY: 'auto', maxHeight: '700px',
         display: 'flex', flexDirection: 'column', gap: '20px',
       }}>
         {/* Title */}

@@ -91,12 +91,19 @@ class CADPlanner:
     # ── Public API ─────────────────────────────────────────────────────────
 
     async def build_spec(self, idea_text: str) -> dict:
-        """Extract structured CAD spec from free-text idea using OpenAI."""
+        """Extract structured CAD spec from free-text idea using OpenRouter."""
         try:
-            return await self._extract_via_openai(idea_text)
+            logger.info("🔵 CADPlanner.build_spec called with idea: %s", idea_text[:60])
+            spec = await self._extract_via_openai(idea_text)
+            logger.info("✅ OpenRouter spec generated: type=%s span=%s motors=%s", 
+                       spec.get("component_type"), spec.get("span_mm"), spec.get("motor_count"))
+            return spec
         except Exception as exc:
-            logger.error("CADPlanner OpenAI extraction failed: %s", exc)
-            return self._fallback_spec(idea_text)
+            logger.error("❌ CADPlanner OpenRouter extraction failed: %s", exc)
+            spec = self._fallback_spec(idea_text)
+            logger.warning("⚠️  Using fallback spec instead: type=%s span=%s",
+                          spec.get("component_type"), spec.get("span_mm"))
+            return spec
 
     # Keep legacy alias
     async def generate_parameters(self, idea_text: str) -> dict:
@@ -107,12 +114,16 @@ class CADPlanner:
     async def _extract_via_openai(self, idea_text: str) -> dict:
         import httpx, asyncio
 
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        # Use OpenRouter - read API key directly from environment
+        api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        logger.info("📡 Attempting OpenRouter extraction (api_key present: %s)", bool(api_key))
+        
         if not api_key or api_key.startswith("sk-your"):
-            raise ValueError("No valid OPENAI_API_KEY in environment")
+            logger.error("❌ No valid OPENROUTER_API_KEY found in environment")
+            raise ValueError("No valid OPENROUTER_API_KEY in environment")
 
         payload = {
-            "model": "gpt-4o-mini",
+            "model": "nvidia/nemotron-3.5-lightning:free",
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -120,15 +131,18 @@ class CADPlanner:
             ],
         }
 
+        logger.info("🚀 Sending request to OpenRouter with idea: %s", idea_text[:60])
+        
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                "https://openrouter.ai/api/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}",
                          "Content-Type": "application/json"},
                 json=payload,
             )
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
+            logger.info("📥 OpenRouter response (first 200 chars): %s", raw[:200])
 
         # Strip any accidental markdown fences
         if raw.startswith("```"):
@@ -139,7 +153,7 @@ class CADPlanner:
 
         spec = json.loads(raw)
         logger.info(
-            "CADPlanner spec: type=%s span=%smm motors=%s",
+            "✅ CADPlanner spec parsed: type=%s span=%smm motors=%s",
             spec.get("component_type"), spec.get("span_mm"), spec.get("motor_count"),
         )
         return self._normalise(spec)

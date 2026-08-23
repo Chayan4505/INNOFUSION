@@ -14,7 +14,17 @@ class NoveltyAnalysisChain:
     RAG Pipeline for analyzing an idea against retrieved prior art.
     """
     def __init__(self, llm=None):
-        self.llm = llm or ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+        # Use OpenRouter with Nemotron if not provided
+        if llm is None:
+            from packages.ai_core.models.config import config
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                openai_api_key=config.openrouter_api_key,
+                openai_api_base="https://openrouter.ai/api/v1",
+                model_name="nvidia/nemotron-3.5-lightning:free",
+                temperature=0
+            )
+        self.llm = llm
         self.parser = JsonOutputParser(pydantic_object=NoveltyOutput)
         
         self.prompt = ChatPromptTemplate.from_messages([

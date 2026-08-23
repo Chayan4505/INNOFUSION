@@ -12,6 +12,17 @@ try:
 except ImportError:
     ChatAnthropic = ChatGoogleGenerativeAI
 
+# OpenRouter uses OpenAI-compatible API, so we use ChatOpenAI with custom base_url
+class OpenRouterChatOpenAI(ChatOpenAI):
+    """ChatOpenAI adapter for OpenRouter API"""
+    def __init__(self, api_key: str = None, model: str = None, **kwargs):
+        super().__init__(
+            openai_api_key=api_key,
+            openai_api_base="https://openrouter.ai/api/v1",
+            model_name=model or "nvidia/nemotron-3.5-lightning:free",
+            **kwargs
+        )
+
 class ModelRegistry:
     """
     Resolves a string provider name into the corresponding LangChain implementation.
@@ -20,9 +31,11 @@ class ModelRegistry:
     def get_langchain_class(provider: str):
         if provider == AIProvider.GEMINI or provider == "gemini":
             return ChatGoogleGenerativeAI
-        elif provider == AIProvider.OPENAI:
+        elif provider == AIProvider.OPENAI or provider == "openai":
             return ChatOpenAI
-        elif provider == AIProvider.ANTHROPIC:
+        elif provider == AIProvider.ANTHROPIC or provider == "anthropic":
             return ChatAnthropic
+        elif provider == "openrouter":
+            return OpenRouterChatOpenAI
         else:
             return ChatGoogleGenerativeAI

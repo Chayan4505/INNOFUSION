@@ -59,7 +59,7 @@ export default function Navbar({ variant = 'dark', showLogo = true, topOffset = 
       <Link href="/projects/new" style={{
         fontSize: '12px', fontWeight: '600',
         color: isDark ? '#fff' : '#000',
-        padding: '6px 16px', borderRadius: '20px',
+        padding: '6px 16px',
         textDecoration: 'none',
         ...liquidGlassButton,
       }} onMouseEnter={e => {
